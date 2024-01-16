@@ -1,0 +1,560 @@
+---
+title: Biostatistics Project 2 - The Big One - Investigating the impact of cryopreservation on the survival of bacteria
+author: Group 28 - Matthys Liesbeth, Van Assel Maxim, Vanbosseghem Emma & Van de Sijpe Sarah
+date: December 18, 2023
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cerulean
+
+---
+<div style="text-align: justify;">
+
+# Introduction
+
+Ghent University's Laboratory of Microbiology is conducting the Mibirem project, an experimental study, aiming to optimize the preservation of microbial consortia. The preservation methods under evaluation involve lyophilization at room temperature using two distinct techniques (LYO1 and LYO2) and storage at ultra-low temperatures, either -80 °C (CRYO1) or -196 °C (CRYO2). Simultaneously, seven different preservation media labeled as A, B, C (cryopreservationD), and D, E, F, G (lyophilization) are being tested. Fourteen scenarios, combining different preservation methods (lyophilization and cryopreservation) and media types, are being tested.
+
+To assess the survival rates of microbial consortia under these varied conditions, the researchers collect samples at different time points: 0, 3, 6, 12, 18, 24, and 30 months after initiating storage, with time point 0 representing the moment before storage. The primary focus is on the initial measurement and the 3-month time point, and for each scenario, five tubes containing the microbial consortium are stored for subsequent flow cytometry analysis.
+
+Flow cytometry, a rapid, reproducible, and cost-effective technique, is employed to quantify total bacterial numbers and assess the live/dead ratio of bacterial cells. The researchers have compiled four distinct datasets, capturing the percentage of live, injured, and dead bacteria in each sample, along with the total number of bacterial cells. Each sample undergoes three measurements for each parameter.
+
+In this project, the central research question is: Does the CRYO2 preservation method have an effect over time on stored samples, and does this effect vary across different preservation media?
+
+```{r, message = FALSE, results='hide', warning=FALSE}
+# Set the CRAN mirror
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+
+# Installing Packages
+install.packages("ggridges")
+install.packages("grid")
+install.packages("gridExtra")
+
+# Loading Packages
+library(grid)
+library(gridExtra)
+library(ggridges)
+library(tidyr)
+library(tidyverse)
+library(MASS)
+library(boot)
+```
+
+# Variables, replicates and hypotheses
+
+In this study, the response variable is the percentage of survived bacteria. The explanatory variables are the preservation media and time. The percentage of living cells was measured three times from the same aliquot with the same device, which makes this a pseudoreplication. The measurements were not performed on independent samples. For each scenario, five tubes containing the microbial consortium were used, on which parallel measurements were performed. Thus, these five subsamples are biological replicates.
+
+\[\text{H}_0^1: \text{On average, there is no difference in the survival of the bacteria between timepoint zero months and after timepoint 3 months using any of the preservation media.}\]
+
+\[\text{H}_1^1: \text{On average, there is a difference in the survival of the bacteria between timepoint zero months and after timepoint 3 months using any of the preservation media.}\]
+
+If the first null hypothesis can be rejected and the alternative hypothesis is accepted, the following hypotheses can be subsequently investigated.
+
+\[\text{H}_0^2: \text{On average, there is no difference in the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium A.}\]
+
+\[\text{H}_0^3: \text{On average, there is no difference in the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium B.}\]
+
+\[\text{H}_0^4: \text{On average, there is no difference in the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium C.}\]
+
+\[\text{H}_1^2: \text{On average, there is a difference in the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium A.}\]
+
+\[\text{H}_1^3: \text{On average, there is a difference in the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium B.}\]
+
+\[\text{H}_1^4: \text{On average, there is a difference in the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium C.}\]
+
+
+# Data Exploration
+
+In this study, we encountered pseudoreplication due to the nature of the experimental design. Multiple measurements were taken on the same aliquot using the same device, introducing potential dependencies between observations. To address this, we needed a reliable method to aggregate these repeated measurements and mitigate the risk of inflated significance levels.
+
+In our case, the three measurements taken for each sample were averaged, providing a representative value for analysis. This not only addresses the challenge of pseudoreplication but also facilitates a more accurate assessment of differences in bacterial survival between timepoints and preservation media.
+
+```{r}
+cell_count <- read.csv("Cell_Count_v2.txt", header=TRUE, sep="\t")
+cell_count$Medium <- as.factor(cell_count$Medium)
+cell_count$Method <- as.factor(cell_count$Method)
+cell_count$Timepoint <- as.factor(cell_count$Timepoint)
+
+data <- cell_count %>%
+  filter(Method %in% c("CRYO2", "None"))
+data <- data[, c("sample_name", "percent_live_1", "percent_live_2", "percent_live_3", "Medium", "Timepoint")]
+
+data <- data  %>%
+  mutate(
+    mean_percent_live = rowMeans(across(starts_with("percent_live")), na.rm = TRUE),
+    std_dev = apply(across(starts_with("percent_live")), 1, sd, na.rm = TRUE),
+    variance = std_dev^2) %>%
+  arrange(desc(row_number() %in% (nrow(.) - 4):nrow(.)))
+data$Medium <- factor(data$Medium, levels = c("None","A", "B", "C"))
+knitr::kable(data)
+```
+
+In the table above, the standard deviation was added as a statistical measure to evaluate the extent of variation among the three replicates. This metric proves valuable in quantifying the dispersion or spread of data points relative to their mean. Overall, most of the standard deviations lie in a range between 0 and 3, which is acceptable given that mean ranges between 55 and 75. However some higher standard deviations are observed at the following samples: CRYO2_A_02, CRYO2_B_02, CRYO2_B_04 and CRYO2_C_05. For these samples, a standard deviation of respectively 7.1720592, 3.4788504, 4.6167232, and 4.5352214 was calculated, indicating a larger spread between each measurement. The variance was added to the table to further look into the variation among the three replicates. For CRYO2_A_02, the calculated variance is 51.4384333, which is very close to the mean (67.06667), although it does not pose a problem as the variance is still lower than the mean. This variation is unwanted as we want reproducible measurements, a higher standard deviation and variance might indicate an error in measurements or handling of the different samples.
+
+```{r}
+# Group by Medium and Timepoint and calculate mean, variance, and standard deviation
+mean_var_std <- data %>%
+  group_by(Timepoint) %>%
+  summarize(
+    mean_percent_live = mean(c(percent_live_1, percent_live_2, percent_live_3), na.rm = TRUE),
+    variance_percent_live = var(c(percent_live_1, percent_live_2, percent_live_3), na.rm = TRUE),
+    std_dev_percent_live = sd(c(percent_live_1, percent_live_2, percent_live_3), na.rm = TRUE)
+  )
+
+knitr::kable(mean_var_std)
+```
+
+In the table above, the mean percentage of living cells at time point 0 is 74.5% and the variance is 1.65%. The relatively low variance compared to the mean indicates a reasonable fit to a less dispersed distribution. At time point 3, the mean drops to 64.6% and the variance increases to 32.7%.
+
+```{r}
+# Group by Medium and Timepoint and calculate mean, variance, and standard deviation
+mean_var_std <- data %>%
+  group_by(Medium) %>%
+  summarize(
+    mean_percent_live = mean(c(percent_live_1, percent_live_2, percent_live_3), na.rm = TRUE),
+    variance_percent_live = var(c(percent_live_1, percent_live_2, percent_live_3), na.rm = TRUE),
+    std_dev_percent_live = sd(c(percent_live_1, percent_live_2, percent_live_3), na.rm = TRUE)
+  )
+
+knitr::kable(mean_var_std)
+```
+
+Upon examining different media categories, we delved into the presence of overdispersion within each medium. The findings reveal that, before storage and after storage in media A and B, there are no signs of overdispersion, as the variance consistently falls short of surpassing the mean. However, upon closer inspection of medium C, post-storage, overdispersion becomes apparent.
+Interestingly, despite the identification of overdispersion in medium C, the decision to adopt an overdispersion model requires thoughtful consideration. This is due to the relatively subtle discrepancy between the mean and variance.
+
+The data's variability will be further examined through boxplots. First, the original dataset with all the percentages of live bacteria will be used.
+
+```{r}
+# Gather the percent_live columns into a single column
+data_long <- data %>%
+  gather(key = "Replicate", value = "percent_live", percent_live_1:percent_live_3) %>%
+  mutate(Replicate = gsub("percent_live_", "", Replicate))
+data_long <- data_long[, c("Medium", "Timepoint", "Replicate", "percent_live")]
+data_long <- data_long %>% arrange(Timepoint)
+
+# Boxplot not using the means
+ggplot(data_long, aes(x = Medium, y = percent_live)) +
+  geom_boxplot(color= c('#00366C', '#3D1778', '#3D1778', '#3D1778'),  fill = c('#BDD7FB', '#8576B7', '#BFB9DC', '#DFDDF1'), outlier.shape =15) +
+  geom_point(color = c(rep('#00366C', 15), rep('#3D1778', 45)), alpha=0.7, shape=15) +
+  labs(title = "Percentage of Live Bacteria",
+       subtitle = 'Grouped by Timepoint and Medium',
+       y = "Percentage of Live Bacteria") +
+  scale_x_discrete(labels = c("Before storage\nat timepoint 0 months", "After CRYO2 storage\nat timepoint 3 months\nin medium A", "After CRYO2 storage\nat timepoint 3 months\nin medium B", "After CRYO2 storage\nat timepoint 3 months\nin medium C")) +
+  geom_vline(xintercept = 1.5, linetype = "dashed", color = "black") +
+  theme_minimal() +
+  theme(axis.title.x=element_blank())
+```
+
+Analyzing the boxplots for all the percentages of live bacteria in each medium reveals noticeable variation, indicating unequal dataset variance. The distinct interquartile ranges further support this observation.
+
+Although median values across media show little difference, the initial median at timepoint 0 months exceeds those after a 3-month storage in mediums A, B, or C, suggesting a potential decrease in the percentage of living cells over this period.
+
+However, as the mean percentages are taken to combat the pseudoreplication issue, the mean percentage of the live bacteria will be used to investigate the data's variability and not the actual percentages.
+
+```{r}
+# Boxplot using ggplot using the means
+ggplot(data, aes(x = Medium, y = mean_percent_live, col=Medium)) +
+  geom_boxplot(color= c('#00366C', '#3D1778', '#3D1778', '#3D1778'),  fill = c('#BDD7FB', '#8576B7', '#BFB9DC', '#DFDDF1'), outlier.shape =15) +
+  geom_point(color = c(rep('#00366C', 5), rep('#3D1778', 15)), alpha=0.7, shape=15) +
+  labs(title = "Mean Percentage of Live Bacteria",
+       subtitle = 'Grouped by Timepoint and Medium',
+       y = "Mean percentage of Live Bacteria") +
+  scale_x_discrete(labels = c("Before storage\nat timepoint 0 months", "After CRYO2 storage\nat timepoint 3 months\nin medium A", "After CRYO2 storage\nat timepoint 3 months\nin medium B", "After CRYO2 storage\nat timepoint 3 months\nin medium C")) +
+  geom_vline(xintercept = 1.5, linetype = "dashed", color = "black") +
+  theme_minimal() +
+  theme(axis.title.x=element_blank())
+```
+
+Upon exploring the boxplots representing the mean percentages of live bacteria per medium, it becomes evident that there exists unequal variance within the dataset. This observation is substantiated by the obvious distinction in interquartile ranges among the various mean percentages of live bacteria per medium. However, when comparing only the first timepoint and medium B, equal variance is observed.
+
+While median values between the media are closely aligned, suggesting no significant differences, the median value at the experiment's onset (Timepoint 0 months) surpasses those observed after a 3-month storage period in mediums A, B, or C. This gives a first indication that the percentage of living cells is decreased after 3 months of storage. With only 5 data points per boxplot, the median can easily be influenced by a single data point that's not quite an outlier but stands out from the others. This can make the boxplot's interquartile range significantly larger. So, the interquartile range of the boxplot might be influenced by individual data points that don't quite fit in with the rest, resulting in unequal variance.
+
+Within the data for Medium B, two outliers CRYO2_B_02 (68.76) and CRYO_02_B_04 (59.56) are identified. These outliers, coincidentally associated with higher standard deviations, could pose challenges for the statistical model, complicating the fitting process.
+
+```{r}
+# QQ-plot using ggplot
+ggplot(data, aes(sample = mean_percent_live)) +
+  geom_qq(color = c(rep('#00366C', 5), rep('#3D1778', 15)), alpha=0.7, shape=15) +
+  geom_qq_line(color = c(rep('#00366C', 2), rep('#3D1778', 6))) +
+  facet_wrap(~Medium, labeller = labeller(Medium = c('None' = 'Before storage\nat timepoint 0 months', 'A' = 'After CRYO2 storage\nat timepoint 3 months\nin medium A', 'B' = 'After CRYO2 storage\nat timepoint 3 months\nin medium B', 'C' = 'After CRYO2 storage\nat timepoint 3 months\nin medium C'))) +
+  labs(title = "QQ Plot of percent_live by Replicate and Medium",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles",
+       subtitle = "Grouped by Medium") +
+  theme_minimal()
+```
+
+
+The analysis is constrained by a small sample size, comprising only five data points. This limitation affects the reliability of statistical tools such as quantile-quantile (QQ) plots, traditionally more robust with larger datasets. Caution is advised when interpreting results, and findings should be considered preliminary. Supplementing analyses with additional methods and recognizing the impact of small sample variability is crucial for a more nuanced understanding of the data. Considering this, the QQ-plots indicate a normal distribution. The sample quantiles show no big deviations from the theoretical quantiles as the data points on the QQ plot align closely to the straight line.
+
+The statistical analysis will be continued with the means of the percentages of live bacteria to combat the pseudoreplication issue.
+
+# Model selection and statistical inference
+
+## Model for the timepoint
+To investigate the first null hypothesis, the percentage of live cells at the first timepoint will be compared to the percentage of live cells after 3 months of storage in either of the media. This will be done to investigate if there is a statistical effect in the percentage of live cells over time when storing the samples by the CRYO2 method.
+
+First, a Welch Two Sample t-test is employed to assess whether the percentage of live cells at timepoint 0 differs significantly from the percentage of live cells after three months of storage. This test is chosen due to the comparison between two groups: the initial timepoint before storage and the subsequent timepoint after 3 months, with the Welch correction applied to account for unequal variances. This t-test is used to assess the first null hypothesis.
+
+```{r}
+t_test <- t.test(data$mean_percent_live~data$Timepoint, var.equal=FALSE)
+t_test
+```
+
+The t-test yielded a t-value of 7.1498 with 15.291 degrees of freedom, resulting in an extremely significant p-value of 2.991e-06 (p < 0.001). This p-value leads us to reject the first null hypothesis.
+
+Furthermore, a 95 percent confidence interval for the true difference in means was calculated to be between 6.925494 and 12.794506. This interval provides a range within which we can be 95% confident the actual difference in means lies.
+
+To further investigate this difference, generalized linear models will be employed.
+
+### Poisson Generalized Linear Model
+
+First, the Poisson model will be used to see if this results in a reliable model suitable for this dataset, since there is count data.
+
+```{r, warning=FALSE}
+# Perform Poisson Generalized Linear Model
+model_poisson <- glm(mean_percent_live~Timepoint, data=data, family=poisson)
+# Make diagnostic plots
+glm.diag.plots(model_poisson)
+```
+
+The upper left plot validates the homoscedasticity between the groups. The distribution of residuals deviates from the ideal scenario of equal scattering around zero between the two groups, indicating the presence of heteroscedasticity. Specifically, there is a notable increase in variability among the samples at timepoint 3 months, while the samples at timepoint zero months exhibit less variability, as evidenced by their closer proximity. It's important to note that the group at timepoint zero months comprises fewer data points compared to the group at timepoint 3 months. This difference in sample size could potentially influence the observed variability in the spreading of residuals.
+
+The upper right plot functions as a diagnostic tool to evaluate whether the data points follow a Poisson distribution. In an optimal scenario, the ordered deviance residuals would closely follow the theoretical Poisson distribution line, indicating a Poisson-distributed dataset. However, the deviations observed from the expected Poisson distribution line imply a divergence from an ideal Poisson distribution within the dataset.
+
+The lower left  plot represents the Cook's distance plot which is a valuable diagnostic tool used to assess the influence of individual observations on a statistical model. In this plot, each point represents an observation, and its vertical position indicates the Cook's distance, a measure of the impact of that observation on the model's fitted values.
+The dashed vertical line on the plot corresponds to the threshold calculated as h/(h-1), where h is the number of model parameters. Points falling close to or to the left of this line suggest that the observations exert a typical or expected influence on the model and do not stand out as influential outliers. In this plot some data points are situated on the line, but the majority is located left to the threshold line, indicating that there are no outliers present.
+
+The lower right plot is quite similar to the lower left plot. The y-axis indicates the Cook's distance, a measure of the impact of that observation on the model's fitted values. The x-axis corresponds to the case or observation number, with each point on the plot indicating a specific data point in your dataset. There is no dashed horizontal line, indicating the threshold value, visible in the plot, as the data points are located below it and there are no outliers present.
+
+```{r}
+summary(model_poisson)
+```
+
+The observed deviations from ideal scenarios, such as the heteroscedasticity in the upper left plot and the departure from a Poisson distribution in the upper right plot, suggest limitations in the fit of the Poisson model to the data. Adding to this, the infinite AIC (Akaike Information Criterion) value reinforces the notion that the Poisson model is not a suitable fit for the dataset. The AIC serves as a measure of model goodness-of-fit, with lower values indicating a better fit. An infinite AIC suggests that the Poisson model does not effectively capture the complexity of the data, emphasizing the need for alternative modeling approaches to better represent the underlying structure of the dataset.
+
+It is important to note that the Poisson model could have performed better if multiple timepoints were included in the dataset. The current analysis, with measurements taken only at 0 and 3 months, may not fully capture the temporal dynamics of the underlying processes. Considering the inclusion of additional timepoints at 6, 12, 18, 24, and 30 months could provide a more comprehensive understanding of the data. A more extensive dataset could potentially reveal patterns and trends over time, enhancing the suitability of the Poisson model for capturing the observed variability.
+
+Given these considerations, we plan to investigate other models that may better accommodate the characteristics of the data and provide a more accurate representation of the underlying processes.
+
+### Negative Binomial Generalized Linear Model
+
+In our quest for a better model following the limitations of the Poisson model, we are considering various alternatives to achieve a more optimal fit for our dataset. An alternative that is often explored in such situations is the negative binomial model. This model is designed to address overdispersion, where the variability in the data exceeds what the Poisson model can account for. Overdispersion occurs when the variance of the data is greater than the mean. The negative binomial model is specifically tailored to handle such overdispersion and can perform effectively in this scenario. However, in our data set, the variance is lower than the mean value of the percentage of living bacteria, indicating that the negative binomial model is also not appropriate. Given this, the negative binomial model is not suitable for our dataset so we are continuing our exploration of alternative models that may be more appropriate for our dataset.
+
+```{r, warning=FALSE}
+model_negative_binomial <- glm.nb(mean_percent_live~Timepoint, data=data)
+glm.diag.plots(model_negative_binomial)
+```
+
+Similar to the 2 previous models, the upper left plot indicates that there is heteroscedasticity, since the two groups scatter differently around zero.
+
+However, the upper right plot indicates that the data does not follow a negative binomial distribution, since the ordered deviance residuals are not aligning with the theoretical negative binomial distribution line.
+
+The two lower plots are again very similar to the previous models, as the data points do not cross the thresholds, indicating that there are no outliers present.
+
+```{r}
+summary(model_negative_binomial)
+```
+
+The AIC value is 132.89, which is lower than the Poisson model. Although this provides a better fit than the previous model, we continue looking for a model that performs better because of the lack of overdispersion of the data.
+
+### Gaussian Generalized Linear Model
+
+We opted for a Gaussian Generalized Linear Model (GLM) for our analysis due to the normal distribution observed in the dataset. This choice allows us to effectively model the relationship between variables while accommodating the data's inherent distribution characteristics.
+
+```{r}
+model_gaussian <- glm(mean_percent_live~Timepoint, data=data, family=gaussian)
+glm.diag.plots(model_gaussian)
+```
+
+Similar to the last model, the upper left plot indicates that there is heteroscedasticity, since the two groups scatter differently around zero.
+
+However, the upper right plot indicates that the data follows a normal distribution, since the ordered deviance residuals follow the theoretical normal distribution line.
+
+The two lower plots are again very similar to the previous model, as the data points do not cross the thresholds, indicating that there are no outliers present.
+
+```{r}
+summary(model_gaussian)
+```
+
+The AIC of the Gaussian Generalized Linear Model is 121.77, which is lower than the Poisson and Negative Binomial model. This model provides a better fit to the data than the previous two models.
+
+### The Best Model
+
+After testing several models, the Gaussian Generalized Linear Model emerged as the most effective performer. It demonstrated superior ability in fitting the data and capturing variances compared to the other two models. This is evident in the diagnostic plots, particularly the upper right plot, where the data distribution closely aligns with a normal distribution. This alignment is observed through the ordered deviance residuals, which closely follow the theoretical normal distribution line.
+
+Furthermore, the AIC value serves as a valuable tool for model comparison. The model with the lowest AIC is considered the most favorable. In this case, the Gaussian Generalized Linear Model achieved the lowest AIC score (121.77), affirming its superiority in performance on the provided dataset.
+
+The model will be written as such:
+
+\[E[Y] = \beta_0 + X_1 \cdot \beta_1\]
+
+where:
+
+-  \(X_1\) is a categorical variable representing the timepoint (0: before storage, 3: after 3 months of storage)
+
+```{r}
+summary(model_gaussian)
+```
+
+```{r, message=FALSE}
+conf_intervals <- confint(model_gaussian)
+conf_intervals
+```
+
+* The estimated intercept (β0) is 74.479 (95% CI [70.43981, 78.518853]). This is the predicted percentage of living cells for Timepoint 0 months.
+* The coefficient for Timepoint 3 months (β1) is -9.860 (95% CI [-14.52444, -5.195565]). This is the predicted difference in percentage of living cells for Timepoint 3 months compared to Timepoint 0 months. Thus the predicted percentage of living cells is 64.619 at Timepoint 3 months.
+* Both intercept and coefficient have extremely significant p-values (p < 0.001), providing reason to reject the first null hypothesis. This suggest that storing over 3 months using the CRYO2 method in any of the media has a significant effect on the percentage of living cells in the samples.
+* The dispersion parameter for the Gaussian family is provided (21.23896). It characterizes the variability of the residuals around the fitted values.
+* The null deviance (746.87) represents the deviance of the null model (i.e., a model with no predictors). The residual deviance (382.30) represents the deviance of the fitted model. As the value gets lower, the fitted model performs better than the null model.
+
+
+
+## Models on Medium level
+
+
+To investigate the 2nd, 3rd and 4th null hypothesis, the amount of live cells before storage and after storage in respectively medium A, B or C will be  compared. Therefore, the dataset was split in three dataframes, one for each medium and the datapoints of the first timepoint. This will be done to see if the statistical effect is different for either one of the preservation media.
+
+```{r}
+data_none_a <- data %>%
+  filter(Medium == 'None' | Medium == "A")
+
+data_none_b <- data %>%
+  filter(Medium == 'None' | Medium == "B")
+
+data_none_c <- data %>%
+  filter(Medium == 'None' | Medium == "C")
+```
+
+Both Poisson and Gaussian generalized linear models will be checked again, as the Gaussian model may not necessarily be the most appropriate choice for our analysis when looking on a medium level. The Negative Binomial generalized linear model will only be re-evaluated on the dataframe for medium C, as the data for medium C show signs of overdispersion.
+
+### Poisson Generalized Linear Model
+
+```{r, warning=FALSE}
+model_poisson_a <- glm(mean_percent_live~Timepoint, data=data_none_a, family=poisson)
+glm.diag.plots(model_poisson_a)
+```
+
+```{r}
+summary(model_poisson_a)
+```
+
+```{r, warning=FALSE}
+model_poisson_b <- glm(mean_percent_live~Timepoint, data=data_none_b, family=poisson)
+glm.diag.plots(model_poisson_b)
+```
+
+```{r}
+summary(model_poisson_b)
+```
+
+The diagnostic plots for the poisson model for medium A and B does not show a good fit of the model to the data. On top of this, the AIC value reaches infinity, indicating that the poisson model does not capture the variance in the data.
+
+```{r, warning=FALSE}
+model_poisson_c <- glm(mean_percent_live~Timepoint, data=data_none_c, family=poisson)
+glm.diag.plots(model_poisson_c)
+```
+
+```{r}
+summary(model_poisson_c)
+```
+
+Although the AIC value for the poisson model for medium C is also infinity, indicating a bad fit of the model to the data, the diagnostic plots show the opposite. The upper right plot indicates that the data is close to following a poisson distribution, since the ordered deviance residuals are aligning with the theoretical poisson distribution line.
+
+The Poisson model for all cases (A, B, and C) was tested to investigate the impact of time on each medium when storing the bacteria for 3 months using the CRYO2 method. However, the Poisson model did not provide a satisfactory fit due to reasons mentioned earlier.
+
+### Negative Binomial Generalized Linear Model
+
+Despite the subtle difference between the mean (62.9) and variance (66.5) in the dataframe related to medium C, a negative binomial model will be tested, since there is overdispersion in the data related to medium C.
+
+```{r, warning=FALSE}
+model_negative_binomial_c <- glm.nb(mean_percent_live~Timepoint, data=data_none_c)
+glm.diag.plots(model_negative_binomial_c)
+```
+
+```{r}
+summary(model_negative_binomial_c)
+```
+
+The AIC value for the negative binomial model for medium C is 71.186, indicating a reasonable fit of the model to the data. The upper right plot indicates that the data is close to following a negative binomial distribution, since the ordered deviance residuals are aligning with the theoretical negative binomial distribution line.
+
+### Gaussian Generalized Linear Model
+Now, we aim to scrutinize the suitability of the Gaussian GLM model for each medium (A, B, and C). Despite our initial findings suggesting its effectiveness in capturing the temporal effects when storing bacteria, it remains crucial to confirm whether the Gaussian model is the best fit for each specific medium.
+
+The model for medium A will be written as such:
+
+\[E[Y_A] = \beta_0 + X_1 \cdot \beta_1\]
+
+where:
+
+-  \(X_1\) is a categorical variable representing the timepoint (0: before storage, 3: after 3 months of storage)
+
+```{r}
+model_gaussian_a <- glm(mean_percent_live~Timepoint, data=data_none_a, family=gaussian)
+glm.diag.plots(model_gaussian_a)
+```
+
+Similar to the plots of the entire dataset, the upper left plot indicates that there is heteroscedasticity, since the two groups scatter differently around zero. The upper right plot indicates that the data follows a normal distribution, since the ordered deviance residuals follow the theoretical normal distribution line. The data points in the two lower plots do not cross the thresholds, indicating that there are no outliers present.
+
+The theoretical normal distribution line is almost a perfect fit for the data points, indicating that this model is a very good representation of the data.
+
+```{r}
+summary(model_gaussian_a)
+```
+
+```{r, message=FALSE}
+conf_intervals_a <- confint(model_gaussian_a)
+conf_intervals_a
+```
+
+* The estimated intercept (β0​) is 74.479 (95% CI [72.81340, 76.145273]). This is the predicted percentage of living cells for Timepoint 0 months.
+* The coefficient for Timepoint 3 months (β1) is -8.743 (95% CI [-11.09933, -6.387341]). This is the predicted difference in the percentage of living cells in Medium A for Timepoint 3 months compared to Timepoint 0 months. Thus, on average, the predicted percentage of living cells in Medium A is 65.736 at Timepoint 3 months.
+* Both the intercept and coefficient have extremely significant p-values (p < 0.001), providing a reason to reject the second null hypothesis. This suggests that storing over 3 months using the CRYO2 method in Medium A has a significant effect on the percentage of living cells in the samples.
+* The dispersion parameter for the Gaussian family is provided (3.612363). It characterizes the variability of the residuals around the fitted values.
+* The null deviance (220.014) represents the deviance of the null model (a model with no predictors). The residual deviance (28.899) represents the deviance of the fitted model. As the value gets lower, the fitted model performs better than the null model.
+
+
+The model for medium B will be written as such:
+
+\[E[Y_B] = \beta_0 + X_1 \cdot \beta_1\]
+
+where:
+
+-  \(X_1\) is a categorical variable representing the timepoint (0: before storage, 3: after 3 months of storage)
+
+```{r}
+model_gaussian_b <- glm(mean_percent_live~Timepoint, data=data_none_b, family=gaussian)
+glm.diag.plots(model_gaussian_b)
+```
+
+The upper left plot indicates that there is heteroscedasticity, since the two groups scatter differently around zero.
+
+The upper right plot indicates that the data follows a normal distribution, since the ordered deviance residuals follow the theoretical normal distribution line. However, the ordered deviance residuals follow the line with less precision, suggesting that this may not be the ideal fit. Nevertheless, an alternative poisson model was analyzed and it was found that this particular model still provided the best fit.
+
+The data points in the two lower plots do not cross the thresholds, indicating that there are no outliers present.
+
+```{r}
+summary(model_gaussian_b)
+```
+
+```{r, message=FALSE}
+conf_intervals_b <- confint(model_gaussian_b)
+conf_intervals_b
+```
+
+* The estimated intercept (β0) is 74.479 (95% CI [72.32399, 76.63467]). This is the predicted percentage of living cells for Timepoint 0 months.
+* The coefficient for Timepoint 3 months (β1) is -9.250 (95% CI [-12.29811, -6.20189]). This is the predicted difference in the percentage of living cells in Medium B for Timepoint 3 months compared to Timepoint 0 months. Thus, on average, the predicted percentage of living cells stored in Medium B is 65.229 at Timepoint 3 months.
+* Both the intercept and coefficient have extremely significant p-values (p < 0.001), providing a reason to reject the third null hypothesis. This suggests that storing over 3 months using the CRYO2 method in Medium B has a significant effect on the percentage of living cells in the samples.
+* The dispersion parameter for the Gaussian family is provided (6.046513). It characterizes the variability of the residuals around the fitted values.
+* The null deviance (262.278) represents the deviance of the null model (a model with no predictors). The residual deviance (48.372) represents the deviance of the fitted model. As the value gets lower, the fitted model performs better than the null model.
+
+The model for medium C will be written as such:
+
+\[E[Y_C] = \beta_0 + X_1 \cdot \beta_1\]
+
+where:
+
+-  \(X_1\) is a categorical variable representing the timepoint (0: before storage, 3: after 3 months of storage)
+
+```{r}
+model_gaussian_c <- glm(mean_percent_live~Timepoint, data=data_none_c, family=gaussian)
+glm.diag.plots(model_gaussian_c)
+```
+
+Again, the upper left plot indicates that there is heteroscedasticity, since the two groups scatter differently around zero.
+
+The upper right plot indicates that the data follows a normal distribution, since the ordered deviance residuals follow the theoretical normal distribution line. However, the ordered deviance residuals follow the line with less precision, suggesting that this may not be the ideal fit. Nevertheless, alternative models (poisson and negative binomial) were analyzed and it was found that this particular model still provided the best fit.
+
+The data points in the two lower plots do not cross the thresholds, indicating that there are no outliers present.
+
+```{r}
+summary(model_gaussian_c)
+```
+
+```{r, message=FALSE}
+conf_intervals_c <- confint(model_gaussian_c)
+conf_intervals_c
+```
+
+* The estimated intercept (β0) is 74.479 (95% CI [69.24195, 79.716714]). This is the predicted percentage of living cells for Timepoint 0 months.
+* The coefficient for Timepoint 3 months (β1) is -11.587 (95% CI [-18.99344, -4.179891]). This is the predicted difference in the percentage of living cells in Medium C for Timepoint 3 months compared to Timepoint 0 months. Thus, on average, the predicted percentage of living cells in Medium C is 62.892 at Timepoint 3 months.
+* Both the intercept and coefficient have extremely significant and significant p-values (p < 0.001 and p = 0.0154, respectively), providing a reason to reject the first null hypothesis. This suggests that storing over 3 months using the CRYO2 method in Medium C has a significant effect on the percentage of living cells in the samples.
+* The dispersion parameter for the Gaussian family is provided (35.70279). It characterizes the variability of the residuals around the fitted values.
+* The null deviance (621.25) represents the deviance of the null model (i.e., a model with no predictors). The residual deviance (285.62) represents the deviance of the fitted model. As the value gets lower, the fitted model performs better than the null model.
+
+Both diagnostic plots and AIC values indicate that the Gaussian generalized linear models perform the best out of the models tested on the data on medium level.
+
+# Conclusion
+
+The gaussian generalized linear model revealed that there is an extremely significant (p < 0.001) difference of the survival of the bacteria between timepoint zero months and after timepoint 3 months using any of the preservation media.
+
+After three months of storage using the CRYO2 method in any of the preservation media, there is on average a decrease of 9.860% (95% CI [14.52444, 5.195565], p = 0.000611 < 0.001) on the percentage of living bacteria. On average, the predicted percentage of living bacteria before storage is 74.479% (95% CI [70.43981, 78.518853], p = 2e-16 < 0.001) and after 3 months of storage 64.619% of living bacteria are expected.
+
+Furthermore, three other gaussian generalized linear model revealed that there is also an extremely significant (p < 0.001) difference on the survival of the bacteria between timepoint zero months and timepoint 3 months when stored in medium A and B. While there is only a significant (p < 0.05) difference when stored in medium C.
+
+When the bacteria are stored for three months using the CRYO2 method in preservation medium A, B and C, there is on average a decrease of 8.743% (95% CI [11.09933, 6.387341], p = 8.61e-05 < 0.001), 9.250% (95% CI [12.29811, 6.20189], p = 0.000343 < 0.001) and 11.587% (95% CI [18.99344, 4.179891], p = 0.0154 < 0.05) of living bacteria respectively. For all the preservation media, the predicted percentage of living bacteria before storage is on average 74.479% (A: 95% CI [72.81340, 76.145273], p = 3.21e-13 < 0.001; B: 95% CI [72.32399, 76.63467], p = 2.51e-12 < 0.001; C: 95% CI [69.24195, 79.716714], 2.96e-09 < 0.001). For preservation medium A, B and C, on average, the expected percentage of living bacteria after three months of storage is 65.736%, 65.229% and 62.892%.
+
+The results derived from the Gaussian Generalized Linear Models suggest that, on average, preservation medium A performs better than medium B and C, as it exhibits a higher percentage of bacterial survival. However, to make this statement, additional information from the later time points is essential.
+
+```{r, warning=FALSE}
+# Combine the values into a data frame
+data_none <- data %>% filter(Medium == 'None')
+data_a <- data %>% filter(Medium == 'A')
+data_b <- data %>% filter(Medium == 'B')
+data_c <- data %>% filter(Medium == 'C')
+
+ridgeline_data <- data.frame(DataTimepoint0 = data_none$mean_percent_live, DataTimepoint3_A = data_a$mean_percent_live, DataTimepoint3_B = data_b$mean_percent_live, DataTimepoint3_C = data_c$mean_percent_live)
+
+# Melt the data for plotting
+melted_data <- gather(ridgeline_data, key = "medium", value = "mean_percent_live")
+melted_data$medium <- factor(melted_data$medium, levels = rev(c("DataTimepoint0", "DataTimepoint3_A", "DataTimepoint3_B", "DataTimepoint3_C")))
+
+# Create ridgeline plot
+ridgeline_plot <- ggplot(melted_data, aes(x = mean_percent_live , y = medium)) +
+  geom_density_ridges(alpha = 0.7, color = c(rep('#3D1778', 1536), rep('#00366C', 512)), fill = rev(c(rep('#BDD7FB', 512), rep('#8576B7', 512), rep('#BFB9DC', 512) , rep('#DFDDF1', 512)))) +
+  labs(x = "Percentage of Live Bacteria") +
+  scale_y_discrete(labels = rev(c(
+  "Before storage
+  at timepoint 0 months",
+  "After CRYO2 storage
+  at timepoint 3 months
+  in medium A",
+  "After CRYO2 storage
+  at timepoint 3 months
+  in medium B",
+  "After CRYO2 storage
+  at timepoint 3 months
+  in medium C")))+
+  theme_ridges() +
+  theme(axis.title.y=element_blank())
+
+title <- textGrob("Ridgeline Plot of Percentage of Live Bacteria", gp = gpar(fontsize = 14, fontface = "bold"), just = "center")
+caption <- textGrob("When the bacteria are stored for three months using the CRYO2 method,
+  on average, the mean percentage of living bacteria
+  decreases with 8.743% in medium A (95% CI [11.09933, 6.387341], p = 8.61e-05),
+  decreases with 9.250% in medium B (95% CI [12.29811, 6.20189], p = 0.000343 < 0.001)
+  and decreases with 11.587% in medium C (95% CI [18.99344, 4.179891], p = 0.0154 < 0.05).", gp = gpar(fontsize = 11), just = "center")
+
+#grid.arrange(ridgeline_plot, title,caption,nrow = 3,heights = c(0.7, 0.05, 0.15))
+
+# Due to some problems transferring the file from Google Colab environment to RStudio,
+# the image that was created in Google Colab was downloaded and loaded as the final plot.
+# The code above does the same, however, the plot, title, and caption show some overlapping issues
+# that we were not able to fix in RStudio.
+
+library(png)
+# Load the plot
+ridgelineplot <- readPNG("C:\\Users\\maxim\\OneDrive - UGent\\1 Master Bio-informatics\\Semester 1\\Biostatistics\\Project2\\finalplot.png")
+# Display the plot
+grid.raster(ridgelineplot)
+```
+
+The plot above visually emphasizes the observed differences in bacterial survival percentages before and after three months of storage using the CRYO2 method in various preservation media.
+
+The larger p value and wider confidence interval for medium C are consistent with the observed data, where points are dispersed from 50% to 75% live bacteria. This dispersion highlights a higher variance in medium C, suggesting potential instability in bacterial survival percentages. Higher variance may imply less consistent outcomes, raising considerations about the reliability of the preservation method in medium C.
+
+Secondly, for medium A, the narrower confidence interval and smaller variance, as evident in the ridgeline plot's narrower peak, suggest a more stable pattern of bacterial survival. The decreased average of 8.743% in medium A, as indicated by the Gaussian Generalized Linear Model, is the lowest among the mediums, further emphasizing its stability in preserving bacteria over three months with the CRYO2 method.
+
+However, when considering medium B, despite a peak that appears higher than medium A in the raw data, the Gaussian Generalized Linear Model's average decrease doesn't fully reflect this. This difference can be attributed to the elevated variance in medium B, manifesting as a secondary peak around 60%, influencing the calculated average decrease and confidence interval from the model. 
+
+Overall, the plot provides a clear representation of the trends across different conditions and supports the statistical findings derived from the Gaussian Generalized Linear Models.
