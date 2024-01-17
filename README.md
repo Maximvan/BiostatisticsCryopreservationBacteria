@@ -1,4 +1,4 @@
-# BiostatisticsCryopreservationBacteria
+# Biostatistics Project 2: Investigating the impact of cryopreservation on the survival of bacteria
 Investigating the impact of cryopreservation on the survival of bacteria as part of the Biostatistics course at Ghent University. The project, which was a group effort, was performed in a shared Google Colab notebook using R. Subsequently, it was transformed to an Rmarkdown and finally to a HTML file.
 
 ## Introduction
