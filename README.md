@@ -1,5 +1,5 @@
 # BiostatisticsCryopreservationBacteria
-Investigating the impact of cryopreservation on the survival of bacteria as part of the Biostatistics course at Ghent University. The project, which was a group work, was performed in a shared Google Colab notebook using R. Subsequently, it was transformed to an Rmarkdown and finally to a HTML file.
+Investigating the impact of cryopreservation on the survival of bacteria as part of the Biostatistics course at Ghent University. The project, which was a group effort, was performed in a shared Google Colab notebook using R. Subsequently, it was transformed to an Rmarkdown and finally to a HTML file.
 
 ## Introduction
 Ghent University's Laboratory of Microbiology is conducting the Mibirem project, an experimental study, aiming to optimize the preservation of microbial consortia. The preservation methods under evaluation involve lyophilization at room temperature using two distinct techniques (LYO1 and LYO2) and storage at ultra-low temperatures, either -80 °C (CRYO1) or -196 °C (CRYO2). Simultaneously, seven different preservation media labeled as A, B, C (cryopreservationD), and D, E, F, G (lyophilization) are being tested. Fourteen scenarios, combining different preservation methods (lyophilization and cryopreservation) and media types, are being tested.
