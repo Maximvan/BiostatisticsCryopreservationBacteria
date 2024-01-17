@@ -1,2 +1,8 @@
 # BiostatisticsCryopreservationBacteria
-Investigating the impact of cryopreservation on the survival of bacteria as part of the Biostatistics course at Ghent University
+Ghent University's Laboratory of Microbiology is conducting the Mibirem project, an experimental study, aiming to optimize the preservation of microbial consortia. The preservation methods under evaluation involve lyophilization at room temperature using two distinct techniques (LYO1 and LYO2) and storage at ultra-low temperatures, either -80 °C (CRYO1) or -196 °C (CRYO2). Simultaneously, seven different preservation media labeled as A, B, C (cryopreservationD), and D, E, F, G (lyophilization) are being tested. Fourteen scenarios, combining different preservation methods (lyophilization and cryopreservation) and media types, are being tested.
+
+To assess the survival rates of microbial consortia under these varied conditions, the researchers collect samples at different time points: 0, 3, 6, 12, 18, 24, and 30 months after initiating storage, with time point 0 representing the moment before storage. The primary focus is on the initial measurement and the 3-month time point, and for each scenario, five tubes containing the microbial consortium are stored for subsequent flow cytometry analysis.
+
+Flow cytometry, a rapid, reproducible, and cost-effective technique, is employed to quantify total bacterial numbers and assess the live/dead ratio of bacterial cells. The researchers have compiled four distinct datasets, capturing the percentage of live, injured, and dead bacteria in each sample, along with the total number of bacterial cells. Each sample undergoes three measurements for each parameter.
+
+In this project, the central research question is: Does the CRYO2 preservation method have an effect over time on stored samples, and does this effect vary across different preservation media?
